@@ -1,0 +1,2 @@
+episode,loss_total,loss_phi(policy),loss_V(value),R,MAE_kW
+1,0.0,0.0,0.0,-21.30969047458202,35.325826373881675
