@@ -22,6 +22,21 @@ from sim_core_v1_1 import (
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 
+#추가 코드 by KH
+#===
+import matplotlib.pyplot as plt
+from stable_baselines3.common.callbacks import BaseCallback
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+# === [NEW] 그래프 출력용 ===
+import matplotlib
+matplotlib.use("Agg")  # 서버/터미널 환경에서 그림 저장만 할 때 권장
+import matplotlib.pyplot as plt
+#===
 
 class KpxBiddingEnv(gym.Env):
     """
@@ -163,7 +178,32 @@ class KpxBiddingEnv(gym.Env):
         }
         return next_obs, reward, terminated, truncated, info
 
+#추가 코드 by KH
+# ==========================
+#  A) 학습 중 reward 기록 콜백
+# ==========================
+class RewardCallback(BaseCallback):
+    def __init__(self):
+        super().__init__()
+        self.episode_rewards = []
+        self.current_rewards = 0.0
 
+    def _on_step(self) -> bool:
+        # SB3: vec_env → reward는 배열 형태로 반환됨
+        reward = self.locals["rewards"][0]
+        done = self.locals["dones"][0]
+
+        self.current_rewards += reward
+
+        if done:
+            self.episode_rewards.append(self.current_rewards)
+            self.current_rewards = 0.0
+
+        return True
+#===
+
+#원본 코드 주석 by KH
+"""
 if __name__ == "__main__":
     # 1) CSV → 시뮬레이션용 데이터프레임 생성
     df = prepare_simulation_data()
@@ -205,3 +245,103 @@ if __name__ == "__main__":
     print(
         f"[TEST] steps={len(rewards)}, total_reward={np.nansum(rewards):,.0f}"
     )
+"""
+
+if __name__ == "__main__":
+
+    # 기존 코드 유지
+    df = prepare_simulation_data()
+    split = int(len(df) * 0.8)
+    train_df, test_df = df[:split], df[split:]
+
+    train_env = DummyVecEnv([lambda: KpxBiddingEnv(train_df, SCENARIO_1_GOV_PLAN)])
+    test_env = KpxBiddingEnv(test_df, SCENARIO_1_GOV_PLAN)
+
+    reward_callback = RewardCallback()
+
+    model = PPO(
+        "MlpPolicy",
+        train_env,
+        verbose=1,
+        n_steps=2048,
+        batch_size=64,
+        n_epochs=10,
+        learning_rate=3e-4,
+    )
+
+
+
+    # ==========================
+    #  B) 학습
+    # ==========================
+    model.learn(total_timesteps=200_000, progress_bar=True, callback=reward_callback)
+
+    # ==========================
+    #  C) 테스트 수행
+    # ==========================
+    obs, _ = test_env.reset()
+    terminated = truncated = False
+
+    rewards = []
+    actions = []
+    while not (terminated or truncated):
+        action, _ = model.predict(obs, deterministic=True)
+        actions.append(int(action))
+
+        obs, r, terminated, truncated, _ = test_env.step(int(action))
+        rewards.append(r)
+
+    total_reward = float(np.nansum(rewards))
+    print(f"[TEST] steps={len(rewards)}, total_reward={total_reward:,.0f}")
+
+    # ==========================
+    #  D) 학습 결과 가시화
+    # ==========================
+
+    # ==========================
+    # 저장 경로 설정
+    now_korea = datetime.now(ZoneInfo("Asia/Seoul"))
+    fig_dir = "./Project/Henergy/Demo_scheme_dev01_(sim_core)/Visualization"
+    fig_path1 = os.path.join(fig_dir, f"Training Episode Rewards_{now_korea.strftime('%Y%m%d_%H%M%S')}.png")
+    fig_path2 = os.path.join(fig_dir, f"Test Episode - Reward per Step_{now_korea.strftime('%Y%m%d_%H%M%S')}.png")
+    fig_path3 = os.path.join(fig_dir, f"Test Episode - Cumulative Reward_{now_korea.strftime('%Y%m%d_%H%M%S')}.png")
+    fig_path4 = os.path.join(fig_dir, f"Action Distribution (Test Episode)_{now_korea.strftime('%Y%m%d_%H%M%S')}.png")
+        
+    # 1) 학습 중 episode reward
+    plt.figure(figsize=(10,4))
+    plt.plot(reward_callback.episode_rewards)
+    plt.title("Training Episode Rewards")
+    plt.xlabel("Episode")
+    plt.ylabel("Reward")
+    plt.grid(True)
+    plt.savefig(fig_path1, dpi=150)
+
+    # 2) 테스트 reward 시계열
+    plt.figure(figsize=(10,4))
+    plt.plot(rewards)
+    plt.title("Test Episode - Reward per Step")
+    plt.xlabel("Step")
+    plt.ylabel("Reward")
+    plt.grid(True)
+    plt.savefig(fig_path2, dpi=150)
+
+    # 3) 누적 reward 곡선
+    cumulative = np.cumsum(rewards)
+    plt.figure(figsize=(10,4))
+    plt.plot(cumulative)
+    plt.title("Test Episode - Cumulative Reward")
+    plt.xlabel("Step")
+    plt.ylabel("Cumulative Reward")
+    plt.grid(True)
+    plt.savefig(fig_path3, dpi=150)
+
+    # 4) 행동(action) 선택 분포 히스토그램
+    plt.figure(figsize=(10,4))
+    plt.hist(actions, bins=9, range=(0,9), edgecolor='black')
+    plt.title("Action Distribution (Test Episode)")
+    plt.xlabel("Action ID (0~8)")
+    plt.ylabel("Frequency")
+    plt.grid(True)
+    plt.savefig(fig_path4, dpi=150)
+
+    print(f"학습 곡선 그래프 저장")
