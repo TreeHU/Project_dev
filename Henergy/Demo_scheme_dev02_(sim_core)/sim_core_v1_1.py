@@ -1,7 +1,8 @@
-# sim_core_v1_1.py
+# sim_core.py (외주용 v1.1)
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
@@ -42,10 +43,9 @@ class SimulationResult:
     dispatch_details: Dict[str, float]
     lng_needed: bool
 
+
 class MarketSimulator:
-    """
-    가격 오름차순(Merit-order) 정산으로 SMP·낙찰량 계산
-    """
+    """가격 오름차순(Merit-order) 정산으로 SMP·낙찰량 계산"""
 
     def __init__(self, national_power_sources: List[PowerSource]):
         self.competitors = national_power_sources
@@ -67,8 +67,7 @@ class MarketSimulator:
     def _market_clear(
         self, demand_kw: float, all_bids: List[Bid]
     ) -> Tuple[float, Dict[str, float], bool]:
-        # 가격 오름차순 정렬
-        sorted_bids = sorted(all_bids)
+        sorted_bids = sorted(all_bids)  # price 오름차순
         cum_kw, smp = 0.0, 0.0
         dispatch = {b.source_name: 0.0 for b in sorted_bids}
 
@@ -123,10 +122,6 @@ class MarketSimulator:
 def create_competitor_power_sources(
     market_condition: pd.Series, scenario_config: dict
 ) -> List[PowerSource]:
-    """
-    시점별 시장 상태(market_condition)와 시나리오 설정(scenario_config)을 받아
-    경쟁 발전원 리스트를 구성.
-    """
     sources: List[PowerSource] = []
     pconf = scenario_config["power_sources"]
     mix = scenario_config["competitor_strategy_mix"]
@@ -187,19 +182,19 @@ def create_competitor_power_sources(
 
     return sources
 
+
 # -----------------------------
 # 4) CSV 기반 데이터 파이프라인 (15분)
 # -----------------------------
-#CSV_PATH = "version1_data.csv" # 원본 코드 주석 line 1줄, 경로 변경
-CSV_PATH = "./Project/Henergy/Demo_scheme_dev01_(sim_core)/version1_data.csv" #추가 코드 by KH
-#HEGY_SHARE = 0.01  # 태양광 중 우리 VPP 몫 (1차 버전: 1%) #원본 코드 주석 by KH
-HEGY_SHARE = 0.20  # 태양광 중 우리 VPP 몫 (1차 버전: 1%)
+
+CSV_PATH = "version1_data.csv"
+HEGY_SHARE = 0.01  # 태양광 중 우리 VPP 몫 (1차 버전: 1%)
 DEFAULT_OPER_RESERVE_RATE = 10.0  # 운영 예비율 고정값 (1차 버전)
+
 
 def prepare_simulation_data(csv_path: str = CSV_PATH) -> pd.DataFrame:
     """
     version1_data.csv 기준으로 RL 환경에서 사용할 데이터프레임 생성.
-
     input CSV columns:
         - present_load
         - renew_power_total
@@ -209,14 +204,12 @@ def prepare_simulation_data(csv_path: str = CSV_PATH) -> pd.DataFrame:
         - renew_power_solar_scaled
         - renew_power_wind_scaled
         - renew_power_total_scaled
-
-    output columns:
+    output columns (env에서 기대하는 것):
         - datetime
         - forecast_load
         - hegy_solar_energy
         - competitor_solar_energy
         - wind_energy
-        - other_renew_energy  # (총 재생 - 태양 - 풍력)
         - oper_reserve_rate
         - da (가격 정보 그대로 유지)
     """
@@ -228,12 +221,9 @@ def prepare_simulation_data(csv_path: str = CSV_PATH) -> pd.DataFrame:
     # 1차 버전: forecast_load = present_load
     df["forecast_load"] = df["present_load"].astype(float)
 
-    # 태양광/풍력은 스케일된 값 사용
+    # 태양광/풍력은 뻥튀기된 값 사용
     solar = df["renew_power_solar_scaled"].astype(float)
     wind = df["renew_power_wind_scaled"].astype(float)
-
-    # 총 재생에너지
-    total_renew = df["renew_power_total_scaled"].astype(float)
 
     # 우리 VPP 몫 / 경쟁자 몫
     df["hegy_solar_energy"] = solar * HEGY_SHARE
@@ -241,10 +231,6 @@ def prepare_simulation_data(csv_path: str = CSV_PATH) -> pd.DataFrame:
 
     # 풍력은 통째로 경쟁자側으로 간주 (1차 버전)
     df["wind_energy"] = wind
-
-    # 기타 재생에너지 = 총 재생 - 태양 - 풍력 (음수 방지)
-    other = (total_renew - solar - wind).clip(lower=0.0)
-    df["other_renew_energy"] = other
 
     # 예비율은 고정값 (추후 실제값으로 바꾸면 됨)
     df["oper_reserve_rate"] = DEFAULT_OPER_RESERVE_RATE
