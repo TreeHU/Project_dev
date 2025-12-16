@@ -187,8 +187,9 @@ def create_competitor_power_sources(
 # 4) CSV 기반 데이터 파이프라인 (15분)
 # -----------------------------
 
-CSV_PATH = "version1_data.csv"
-HEGY_SHARE = 0.01  # 태양광 중 우리 VPP 몫 (1차 버전: 1%)
+CSV_PATH = "./Project/Henergy/Demo_scheme_dev02_(sim_core)/version1_data.csv" #추가 코드 by KH
+#HEGY_SHARE = 0.01  # 태양광 중 우리 VPP 몫 (1차 버전: 1%)
+HEGY_SHARE = 0.20  # 태양광 중 우리 VPP 몫 (1차 버전: 1%)
 DEFAULT_OPER_RESERVE_RATE = 10.0  # 운영 예비율 고정값 (1차 버전)
 
 
