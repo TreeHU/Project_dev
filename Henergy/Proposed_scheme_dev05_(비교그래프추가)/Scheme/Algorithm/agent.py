@@ -13,7 +13,9 @@ torch.backends.mkldnn.enabled = False
 
 import os, sys
 sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
-from Algorithm.network_h import ActorNet, CriticNet
+#from Algorithm.network_h import ActorNet, CriticNet #LSTM
+#from Algorithm.network_transformer import ActorNet, CriticNet
+from Algorithm.network_mamba import ActorNet, CriticNet
 from Algorithm.rolloutmemory import RolloutMemory
 
 

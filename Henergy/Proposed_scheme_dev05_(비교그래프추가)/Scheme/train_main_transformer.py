@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 class Config:
     data_path: str = "./Project/Henergy/Proposed_scheme_dev05_(비교그래프추가)/Data_generator/Data_output/generated_1hour_data_pv_ghi_clearghi_output_y.xlsx"
     sheet_name: str = "data_with_time_feats"
-    episodes: int = 1
+    episodes: int = 100
     episode_len: int = 96
     lambda_ramp: float = 0.01
     gamma: float = 0.99
@@ -120,9 +120,9 @@ def main():
     # --- 로그 파일 준비 ---
     log_dir = "./Project/Henergy/Proposed_scheme_dev05_(비교그래프추가)/Logs"
     os.makedirs(log_dir, exist_ok=True)
-    log_csv = os.path.join(log_dir, f"train_log_{now_korea.strftime('%Y%m%d_%H%M%S')}.csv")
+    log_csv = os.path.join(log_dir, f"train_log_transformer_{now_korea.strftime('%Y%m%d_%H%M%S')}.csv")
     logs = []
-    fig_dir = "./Project/Henergy/Henergy/Proposed_scheme_dev05_(비교그래프추가)/Visualization"
+    fig_dir = "./Project/Henergy/Proposed_scheme_dev05_(비교그래프추가)/Visualization"
 
     # 4) 학습 루프
     for ep in range(1, cfg.episodes + 1):
@@ -206,8 +206,8 @@ def main():
         plt.close(fig)
 
     # 모델 저장
-    agent.save("vpp_actorcritic_lstm.pt", obs_dim=env.obs_dim)
-    print("모델이 저장되었습니다: vpp_actorcritic_lstm.pt")
+    agent.save("vpp_actorcritic_transformer.pt", obs_dim=env.obs_dim)
+    print("모델이 저장되었습니다: vpp_actorcritic_transformer.pt")
     print(f"에피소드 로그 CSV: {os.path.abspath(log_csv)}")
 
 if __name__ == "__main__":
