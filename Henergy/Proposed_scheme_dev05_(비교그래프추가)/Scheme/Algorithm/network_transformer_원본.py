@@ -1,5 +1,4 @@
-# network.py (Transformer backbone stabilized for RL)
-
+# network.py
 from typing import Optional
 import torch
 import torch.nn as nn
@@ -14,54 +13,29 @@ def orthogonal_init(m: nn.Module, gain: float = 1.0):
         if m.bias is not None:
             nn.init.zeros_(m.bias)
 
-def xavier_init(m: nn.Module, gain: float = 1.0):
-    if isinstance(m, nn.Linear):
-        nn.init.xavier_uniform_(m.weight, gain=gain)
-        if m.bias is not None:
-            nn.init.zeros_(m.bias)
-
 # ---------------------------
-# Positional Encoding (Learnable, small scale)
+# Positional Encoding (Learnable)
 # ---------------------------
 class LearnablePositionalEncoding(nn.Module):
     """
     Learnable positional embedding.
     x: (B, T, H) -> x + pos[:, :T, :]
     """
-    def __init__(self, d_model: int, max_len: int = 512, init_std: float = 0.01):
+    def __init__(self, d_model: int, max_len: int = 512):
         super().__init__()
         self.pos = nn.Parameter(torch.zeros(1, max_len, d_model))
-        nn.init.normal_(self.pos, mean=0.0, std=init_std)
+        nn.init.normal_(self.pos, mean=0.0, std=0.02)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         T = x.size(1)
         return x + self.pos[:, :T, :]
 
 # ---------------------------
-# Masked mean pooling
-# ---------------------------
-def masked_mean_pooling(h: torch.Tensor, key_padding_mask: Optional[torch.Tensor]) -> torch.Tensor:
-    """
-    h: (B,T,H)
-    key_padding_mask: (B,T) True=PAD(무시)
-    return: (B,H)
-    """
-    if key_padding_mask is None:
-        return h.mean(dim=1)
-
-    # valid = 1 for non-pad
-    valid = (~key_padding_mask).float()  # (B,T)
-    denom = valid.sum(dim=1, keepdim=True).clamp_min(1.0)  # (B,1)
-    pooled = (h * valid.unsqueeze(-1)).sum(dim=1) / denom  # (B,H)
-    return pooled
-
-# ---------------------------
-# Transformer Backbone (Pre-LN) - RL stabilized
+# Transformer Backbone (Pre-LN)
 # ---------------------------
 class TransformerBackbone(nn.Module):
     """
-    (Input LayerNorm) -> Input projection -> (optional) pos emb (T>1 only) ->
-    TransformerEncoder (dropout default 0) -> (post LN) -> masked mean pooling
+    Input projection -> (optional) positional encoding -> TransformerEncoder -> last token pooling
     - Supports x: (B, D) or (B, T, D)
     """
     def __init__(
@@ -71,22 +45,17 @@ class TransformerBackbone(nn.Module):
         nhead: int = 4,
         num_layers: int = 2,
         dim_ff: int = 256,
-        dropout: float = 0.0,     # RL에서는 기본 0 권장
+        dropout: float = 0.1,
         max_len: int = 512,
         use_pos_emb: bool = True,
-        pos_init_std: float = 0.01,
     ):
         super().__init__()
         self.in_dim = in_dim
         self.d_model = d_model
-        self.use_pos_emb = use_pos_emb
-
-        # 입력 스케일 안정화
-        self.in_norm = nn.LayerNorm(in_dim, eps=1e-5)
 
         self.in_proj = nn.Linear(in_dim, d_model)
 
-        self.pos_emb = LearnablePositionalEncoding(d_model, max_len=max_len, init_std=pos_init_std) if use_pos_emb else None
+        self.pos_emb = LearnablePositionalEncoding(d_model, max_len=max_len) if use_pos_emb else None
 
         enc_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -95,16 +64,13 @@ class TransformerBackbone(nn.Module):
             dropout=dropout,
             activation="gelu",
             batch_first=True,
-            norm_first=True,   # Pre-LN
+            norm_first=True,  # Pre-LN
         )
         self.encoder = nn.TransformerEncoder(enc_layer, num_layers=num_layers)
 
-        # encoder output 안정화
-        self.out_norm = nn.LayerNorm(d_model, eps=1e-5)
-
-        # init: Transformer에는 orthogonal보다 xavier가 무난한 경우가 많음
-        self.apply(lambda m: xavier_init(m, gain=1.0))
-        nn.init.xavier_uniform_(self.in_proj.weight, gain=0.5)  # 너무 크게 시작하지 않게
+        self.apply(lambda m: orthogonal_init(m, gain=1.0))
+        # 입력 프로젝션은 너무 크지 않게
+        nn.init.orthogonal_(self.in_proj.weight, gain=1.0)
         nn.init.zeros_(self.in_proj.bias)
 
     def forward(self, x: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -118,20 +84,15 @@ class TransformerBackbone(nn.Module):
         elif x.dim() != 3:
             x = x.view(x.size(0), -1).unsqueeze(1)
 
-        # input norm (feature-wise)
-        x = self.in_norm(x)
-
         h = self.in_proj(x)  # (B,T,H)
-
-        # T>1일 때만 pos emb 적용 (T=1이면 오히려 불안정 요소)
-        if self.pos_emb is not None and h.size(1) > 1:
+        if self.pos_emb is not None:
             h = self.pos_emb(h)
 
-        # TransformerEncoder
+        # TransformerEncoder: uses key_padding_mask (True=ignore)
         h = self.encoder(h, src_key_padding_mask=key_padding_mask)  # (B,T,H)
-        h = self.out_norm(h)
 
-        pooled = masked_mean_pooling(h, key_padding_mask)  # (B,H)
+        # 마지막 토큰 pooling (기존 LSTM의 last hidden과 대응)
+        pooled = h[:, -1, :]  # (B,H)
         return pooled
 
 # ---------------------------
@@ -145,15 +106,19 @@ class ActorNet(nn.Module):
         self,
         obs_dim: int,
         act_dim: int = 1,
-        hidden: int = 128,
+        hidden: int = 128,      # d_model
         nhead: int = 4,
         num_layers: int = 2,
         dim_ff: int = 256,
-        dropout: float = 0.0,     # RL에서는 기본 0 권장
+        dropout: float = 0.1,
         max_len: int = 512,
         use_pos_emb: bool = True,
     ):
         super().__init__()
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
+        self.hidden = hidden
+
         self.backbone = TransformerBackbone(
             in_dim=obs_dim,
             d_model=hidden,
@@ -169,14 +134,18 @@ class ActorNet(nn.Module):
         self.head = nn.Linear(hidden, act_dim)
         self.sig  = nn.Sigmoid()
 
-        # head는 아주 작게 시작(초기 정책 급변 방지)
-        nn.init.orthogonal_(self.head.weight, gain=0.01)
+        self.apply(lambda m: orthogonal_init(m, gain=1.0))
+        nn.init.orthogonal_(self.head.weight, gain=0.5)
         nn.init.zeros_(self.head.bias)
 
     def forward(self, s: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        s: (B, D) or (B, T, D)
+        key_padding_mask: (B, T) (optional)
+        """
         z = self.backbone(s, key_padding_mask=key_padding_mask)  # (B,H)
         z = self.act(z)
-        a01 = self.sig(self.head(z))  # (B,act_dim)
+        a01 = self.sig(self.head(z))  # (B, act_dim)
         return a01
 
 # ---------------------------
@@ -190,17 +159,20 @@ class CriticNet(nn.Module):
         self,
         obs_dim: int,
         act_dim: int = 1,
-        hidden: int = 128,
+        hidden: int = 128,      # d_model
         nhead: int = 4,
         num_layers: int = 2,
         dim_ff: int = 256,
-        dropout: float = 0.0,     # RL에서는 기본 0 권장
+        dropout: float = 0.1,
         max_len: int = 512,
         use_pos_emb: bool = True,
     ):
         super().__init__()
-        in_dim = obs_dim + act_dim
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
+        self.hidden = hidden
 
+        in_dim = obs_dim + act_dim
         self.backbone = TransformerBackbone(
             in_dim=in_dim,
             d_model=hidden,
@@ -215,11 +187,16 @@ class CriticNet(nn.Module):
         self.act   = nn.LeakyReLU(0.1, inplace=True)
         self.q_out = nn.Linear(hidden, 1)
 
-        # ===== 핵심: Critic Q 출력 0-init (초기 TD 오차 폭발 방지) =====
-        nn.init.zeros_(self.q_out.weight)
+        self.apply(lambda m: orthogonal_init(m, gain=1.0))
+        nn.init.orthogonal_(self.q_out.weight, gain=0.5)
         nn.init.zeros_(self.q_out.bias)
 
     def forward(self, s: torch.Tensor, a01: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        s: (B,D) or (B,T,D)
+        a01: (B,A) or (B,T,A)
+        key_padding_mask: (B,T) (optional)
+        """
         if s.dim() == 2 and a01.dim() == 2:
             x = torch.cat([s, a01], dim=-1).unsqueeze(1)  # (B,1,D+A)
         elif s.dim() == 3 and a01.dim() == 3:

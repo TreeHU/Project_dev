@@ -6,6 +6,7 @@ from typing import Tuple, List
 import numpy as np
 import pandas as pd
 import torch
+import time
 
 import os
 import sys
@@ -45,7 +46,7 @@ def parse_args() -> Config:
                    help="data_generator.py가 생성한 .xlsx 경로")
     p.add_argument("--sheet_name", type=str, default="data_with_time_feats",
                    help="불러올 시트명 (기본: data15m). --separate_sheets 사용 시 병합시트명 지정")
-    p.add_argument("--episodes", type=int, default=90000, help="학습 에피소드 수")
+    p.add_argument("--episodes", type=int, default=80000, help="학습 에피소드 수")
     p.add_argument("--episode_len", type=int, default=24, help="에피소드 길이(60분×24=하루)")
     p.add_argument("--lambda_ramp", type=float, default=0.01, help="램프 패널티 가중치")
     p.add_argument("--gamma", type=float, default=0.99)
@@ -211,4 +212,10 @@ def main():
     print(f"에피소드 로그 CSV: {os.path.abspath(log_csv)}")
 
 if __name__ == "__main__":
+    t_start_total = time.perf_counter()
     main()
+    t_end_total = time.perf_counter()
+    total_elapsed = t_end_total - t_start_total
+    print("\n================= Execution Time Summary =================")
+    print(f"Total execution time     : {total_elapsed:.2f} sec")
+    print("==========================================================\n")
